@@ -18,6 +18,8 @@ export interface GBPProfile {
 }
 
 export interface GBPReview {
+  reviewId?: string | null;
+  reviewUrl?: string | null;
   author: string;
   authorProfileUrl: string | null;
   rating: number;
@@ -412,6 +414,9 @@ export class GBPScraper {
     const startDate = options.reviewsStartDate ? new Date(options.reviewsStartDate) : null;
 
     const finalUrl = await GBPScraper.navigateToBusiness(page, targetUrl, options);
+    const { latitude, longitude } = GBPScraper.extractCoordinates(finalUrl);
+    const cidMatch = finalUrl.match(/:(0x[0-9a-fA-F]+)/);
+    const cidHex = cidMatch ? cidMatch[1] : null;
 
     const nameEl = page.locator(SELECTORS.title).first();
     const businessName = (await nameEl.textContent())?.trim() || 'Unknown Business';
@@ -586,7 +591,20 @@ export class GBPScraper {
         }
       }
 
+      // Extract reviewId from card attribute
+      const reviewId = (await card.getAttribute('data-review-id').catch(() => null)) || null;
+
+      // Build direct Google Maps review URL
+      let reviewUrl: string | null = null;
+      if (reviewId) {
+        const latPart = latitude !== null && longitude !== null ? `@${latitude},${longitude},785m/` : '';
+        const cidPart = cidHex ? `!2m1!1s0x0:${cidHex}` : '';
+        reviewUrl = `https://www.google.com/maps/reviews/${latPart}data=!3m2!1e3!4b1!4m6!14m5!1m4!2m3!1s${reviewId}${cidPart}?entry=ttu`;
+      }
+
       reviews.push({
+        reviewId,
+        reviewUrl,
         author,
         authorProfileUrl,
         rating: starRating,

@@ -22,6 +22,8 @@ export const profileResponseSchema = {
 export const reviewItemSchema = {
   type: 'object',
   properties: {
+    reviewId: { type: 'string', nullable: true, description: 'Google Maps Review ID' },
+    reviewUrl: { type: 'string', nullable: true, description: 'Direct Google Maps Review URL' },
     author: { type: 'string', description: 'Reviewer display name (anonymized if personalData is false)' },
     authorProfileUrl: { type: 'string', nullable: true, description: 'Reviewer profile URL (null if personalData is false)' },
     rating: { type: 'number', description: 'Star rating given (1-5)' },
