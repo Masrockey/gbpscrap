@@ -1,12 +1,14 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { GBPScraper, type ScrapeOptions } from '../scrapers/gbpScraper.js';
 import { jobManager, type JobType } from '../services/jobManager.js';
+import { proxyManager } from '../services/proxyManager.js';
 import {
   scrapeProfileSchema,
   scrapeReviewsSchema,
   scrapeFullSchema,
   createJobSchema,
   getJobStatusSchema,
+  getProxyStatsSchema,
 } from '../schemas/openapiSchemas.js';
 
 interface CommonRequestBody extends ScrapeOptions {
@@ -34,6 +36,16 @@ export const scrapeRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async () => {
       return { status: 'ok', timestamp: new Date().toISOString() };
+    }
+  );
+
+  // Proxy pool health & statistics
+  fastify.get(
+    '/api/proxy/stats',
+    { schema: getProxyStatsSchema },
+    async () => {
+      const stats = proxyManager.getStats();
+      return { success: true, data: stats };
     }
   );
 

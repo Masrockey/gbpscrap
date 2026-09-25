@@ -1,17 +1,33 @@
 export const SELECTORS = {
   // Consent dialog
   consentButtons: [
-    'button[aria-label="Accept all"]',
-    'button[aria-label="Setuju semua"]',
-    'form[action*="consent"] button',
+    'button[aria-label="Accept all" i]',
+    'button[aria-label="Setuju semua" i]',
+    'button[aria-label*="accept" i]',
+    'button[aria-label*="accepteren" i]',
+    'button[aria-label*="akzeptieren" i]',
+    'button[aria-label*="accepter" i]',
+    'button[aria-label*="aceptar" i]',
+    'button[aria-label*="accetta" i]',
+    'form[action*="consent"] button:last-of-type',
+    'form[action*="/save"] button:last-of-type',
+    'form[action*="/s"] button:last-of-type',
+    'button[jsname="b3VHJd"]',
     'button:has-text("Accept all")',
     'button:has-text("Setuju semua")',
+    'button:has-text("Alles accepteren")',
+    'button:has-text("Alle akzeptieren")',
+    'button:has-text("Tout accepter")',
+    'button:has-text("Aceptar todo")',
+    'button:has-text("Accetta tutto")',
     'button:has-text("I agree")',
-    'button:has-text("Saya setuju")'
+    'button:has-text("Saya setuju")',
+    'button:has-text("Ik ga akkoord")',
+    'button:has-text("Ich stimme zu")',
   ],
 
   // Profile details
-  title: 'h1.DUwDvf, h1.fontHeadlineLarge, div[role="main"] h1',
+  title: 'h1.DUwDvf, h1.fontHeadlineLarge, div.TIHn2 h1, div.lMbq3e h1, div.m6QErb h1',
   rating: 'div.F7nice span[aria-hidden="true"], span.ceNzKf, span.fontDisplayLarge',
   reviewCount: 'div.F7nice span:has-text("(") span, div.F7nice span:nth-child(2) span, button[aria-label*="review"]',
   category: 'button.DkEaL, span.DkEaL',
@@ -21,15 +37,15 @@ export const SELECTORS = {
   openingHoursTable: 'table.eKjhZj tr, div[data-item-id*="oh"] table tr',
 
   // Tabs & Reviews section
-  reviewsTab: 'button[role="tab"][aria-label*="Ulasan"], button[role="tab"][aria-label*="Reviews"], button[data-tab-index="1"]',
-  reviewsSortButton: 'button[aria-label*="Urutkan ulasan"], button[aria-label*="Sort reviews"], button[data-value*="Urutkan"]',
+  reviewsTab: 'button[role="tab"][aria-label*="Ulasan" i], button[role="tab"][aria-label*="Reviews" i], button[role="tab"]:has-text("Ulasan"), button[role="tab"]:has-text("Reviews")',
+  reviewsSortButton: 'button[aria-label*="Urutkan ulasan" i], button[aria-label*="Sort reviews" i], button[data-value*="Urutkan" i]',
   sortOptions: {
     relevant: 'div[role="menuitemradio"]:nth-child(1), div[role="menuitemradio"][data-index="0"]',
     newest: 'div[role="menuitemradio"]:nth-child(2), div[role="menuitemradio"][data-index="1"]',
     highest: 'div[role="menuitemradio"]:nth-child(3), div[role="menuitemradio"][data-index="2"]',
     lowest: 'div[role="menuitemradio"]:nth-child(4), div[role="menuitemradio"][data-index="3"]'
   },
-  reviewsScrollContainer: 'div[role="feed"], div.m6QErb.DxyBCb.kA9KIf.dS8AEf, div.m6QErb[aria-label*="Ulasan"], div.m6QErb[aria-label*="Reviews"]',
+  reviewsScrollContainer: 'div[role="feed"], div.m6QErb.DxyBCb.kA9KIf.dS8AEf, div.m6QErb[aria-label*="Ulasan" i], div.m6QErb[aria-label*="Reviews" i]',
 
   // Single review item
   reviewCard: 'div.jftiEf',
@@ -37,10 +53,10 @@ export const SELECTORS = {
   reviewerLink: 'button.al6Kxe, a[data-href*="contrib"]',
   reviewRating: 'span.kvMYJc',
   reviewDate: 'span.rsqaWe',
-  reviewText: 'span.wiI7m, div.MyEned span',
-  reviewExpandButton: 'button.w8nwRe.kyuRq, button[aria-label="Lihat lainnya"], button[aria-label="See more"], button:has-text("Lainnya"), button:has-text("More")',
-  reviewLikes: 'span.pkWtMe, button[aria-label*="orang merasa"]',
+  reviewText: 'span.wiI7m, div.MyEned span, div.wiI7m span, div[lang] span',
+  reviewExpandButton: 'button.w8nwRe.kyuRq, button[aria-label*="Lihat lainnya" i], button[aria-label*="See more" i], button:has-text("Lainnya"), button:has-text("More")',
+  reviewLikes: 'span.pkWtMe, button[aria-label*="orang merasa" i], button[aria-label*="people found" i]',
   ownerResponse: 'div.CDe7pd',
-  ownerResponseText: 'div.CDe7pd div.wiI7m',
-  ownerResponseDate: 'div.CDe7pd span.DHIhFt'
+  ownerResponseText: 'div.CDe7pd div.wiI7pd, div.CDe7pd div.wiI7m, div.CDe7pd div[lang]',
+  ownerResponseDate: 'div.CDe7pd span.DZSIDd, div.CDe7pd span.DHIhFt'
 };

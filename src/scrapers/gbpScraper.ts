@@ -2,6 +2,7 @@ import { PlaywrightCrawler, Configuration, log } from 'crawlee';
 import type { Page } from 'playwright';
 import { SELECTORS } from './selectors.js';
 import { config } from '../config.js';
+import { proxyManager } from '../services/proxyManager.js';
 
 export interface GBPProfile {
   name: string;
@@ -49,6 +50,9 @@ export interface ScrapeOptions {
   personalData?: boolean;
   reviewsStartDate?: string;
   sortBy?: 'newest' | 'highest' | 'lowest' | 'relevant';
+  useProxy?: boolean;
+  proxyUrl?: string;
+  proxyUrls?: string[];
 }
 
 /**
@@ -56,45 +60,63 @@ export interface ScrapeOptions {
  */
 export function parseRelativeDate(raw: string): Date | null {
   if (!raw) return null;
-  const text = raw.toLowerCase().replace(/^(diedit|edited)\s*/i, '').trim();
+  const text = raw.toLowerCase().replace(/^(diedit|edited|bearbeitet|gewijzigd)\s*/i, '').trim();
   const now = new Date();
 
-  if (text.includes('hari lalu') || text.includes('day ago') || text.includes('days ago')) {
+  // Days
+  if (
+    text.includes('hari lalu') || text.includes('day ago') || text.includes('days ago') ||
+    text.includes('tage') || text.includes('tagen') || text.includes('dagen geleden') || text.includes('días')
+  ) {
     const match = text.match(/(\d+)/);
-    const days = match ? parseInt(match[1], 10) : (text.includes('sehari') || text.includes('a day') ? 1 : 1);
+    const days = match ? parseInt(match[1], 10) : 1;
     now.setDate(now.getDate() - days);
     return now;
   }
 
-  if (text.includes('minggu lalu') || text.includes('week ago') || text.includes('weeks ago')) {
+  // Weeks
+  if (
+    text.includes('minggu lalu') || text.includes('week ago') || text.includes('weeks ago') ||
+    text.includes('woche') || text.includes('wochen') || text.includes('weken geleden') || text.includes('semanas')
+  ) {
     const match = text.match(/(\d+)/);
-    const weeks = match ? parseInt(match[1], 10) : (text.includes('seminggu') || text.includes('a week') ? 1 : 1);
+    const weeks = match ? parseInt(match[1], 10) : (text.includes('seminggu') || text.includes('a week') || text.includes('einem') ? 1 : 1);
     now.setDate(now.getDate() - weeks * 7);
     return now;
   }
 
-  if (text.includes('bulan lalu') || text.includes('month ago') || text.includes('months ago')) {
+  // Months
+  if (
+    text.includes('bulan lalu') || text.includes('month ago') || text.includes('months ago') ||
+    text.includes('monat') || text.includes('monaten') || text.includes('maand') || text.includes('maanden') || text.includes('meses')
+  ) {
     const match = text.match(/(\d+)/);
-    const months = match ? parseInt(match[1], 10) : (text.includes('sebulan') || text.includes('a month') ? 1 : 1);
+    const months = match ? parseInt(match[1], 10) : (text.includes('sebulan') || text.includes('a month') || text.includes('einem') ? 1 : 1);
     now.setMonth(now.getMonth() - months);
     return now;
   }
 
-  if (text.includes('tahun lalu') || text.includes('year ago') || text.includes('years ago')) {
+  // Years
+  if (
+    text.includes('tahun lalu') || text.includes('year ago') || text.includes('years ago') ||
+    text.includes('jahr') || text.includes('jahren') || text.includes('jaar') || text.includes('años')
+  ) {
     const match = text.match(/(\d+)/);
-    const years = match ? parseInt(match[1], 10) : (text.includes('setahun') || text.includes('a year') ? 1 : 1);
+    const years = match ? parseInt(match[1], 10) : (text.includes('setahun') || text.includes('a year') || text.includes('einem') ? 1 : 1);
     now.setFullYear(now.getFullYear() - years);
     return now;
   }
 
-  if (text.includes('kemarin') || text.includes('yesterday')) {
+  // Yesterday
+  if (text.includes('kemarin') || text.includes('yesterday') || text.includes('gestern') || text.includes('gisteren')) {
     now.setDate(now.getDate() - 1);
     return now;
   }
 
+  // Hours / Minutes
   if (
-    text.includes('jam lalu') || text.includes('hour ago') || text.includes('hours ago') ||
-    text.includes('menit lalu') || text.includes('minute ago') || text.includes('minutes ago')
+    text.includes('jam lalu') || text.includes('hour ago') || text.includes('hours ago') || text.includes('stunde') || text.includes('stunden') || text.includes('uur geleden') ||
+    text.includes('menit lalu') || text.includes('minute ago') || text.includes('minutes ago') || text.includes('minute') || text.includes('minuten')
   ) {
     return now;
   }
@@ -126,9 +148,24 @@ export class GBPScraper {
       }
     };
 
+    const cleanGoogleUrl = (rawUrl: string): string => {
+      if (rawUrl.includes('consent.google.com')) {
+        try {
+          const parsed = new URL(rawUrl);
+          const cont = parsed.searchParams.get('continue');
+          if (cont && isValidHttpUrl(cont)) {
+            return cont;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return rawUrl;
+    };
+
     // 1. Single direct URL (highest priority for single place)
     if (options.url && !isDummy(options.url)) {
-      const trimmed = options.url.trim();
+      const trimmed = cleanGoogleUrl(options.url.trim());
       if (isValidHttpUrl(trimmed)) {
         return [trimmed];
       } else {
@@ -145,7 +182,7 @@ export class GBPScraper {
     if (options.startUrls && Array.isArray(options.startUrls)) {
       for (const item of options.startUrls) {
         if (item?.url && !isDummy(item.url)) {
-          const trimmed = item.url.trim();
+          const trimmed = cleanGoogleUrl(item.url.trim());
           if (isValidHttpUrl(trimmed)) {
             targets.push(trimmed);
           } else {
@@ -179,16 +216,118 @@ export class GBPScraper {
   }
 
   /**
-   * Handle Google cookie consent popup if present
+   * Pre-configures page viewport and bypasses Google consent dialogs via SOCS/CONSENT/PREF cookies and language headers
+   */
+  public static async preparePageForGoogle(page: Page, gotoOptions?: any, options?: ScrapeOptions): Promise<void> {
+    const hl = (options?.language || options?.hl || 'id').toLowerCase();
+    await page.setViewportSize({ width: 1440, height: 900 }).catch(() => {});
+    if (gotoOptions) {
+      gotoOptions.waitUntil = 'domcontentloaded';
+      gotoOptions.timeout = 35000;
+    }
+    try {
+      // 1. Set Accept-Language HTTP header to match requested language
+      await page.context().setExtraHTTPHeaders({
+        'Accept-Language': `${hl}-${hl.toUpperCase()},${hl};q=0.9,en-US;q=0.8,en;q=0.7`,
+      }).catch(() => {});
+
+      // 2. Set Cookies for Consent and Language Preference (PREF)
+      const domains = [
+        '.google.com',
+        '.google.co.id',
+        '.google.nl',
+        '.google.de',
+        '.google.fr',
+        '.google.co.uk',
+        '.google.es',
+        '.google.it',
+        '.google.pl',
+        '.google.com.au',
+      ];
+      const cookies = domains.flatMap((domain) => [
+        {
+          name: 'SOCS',
+          value: 'CAESHAgBEhJnd3NfMjAyNDA3MjMtMF9SQzIaAmVuIAEaBgiA_LyuBg',
+          domain,
+          path: '/',
+          expires: Math.floor(Date.now() / 1000) + 31536000,
+        },
+        {
+          name: 'CONSENT',
+          value: 'PENDING+999',
+          domain,
+          path: '/',
+          expires: Math.floor(Date.now() / 1000) + 31536000,
+        },
+        {
+          name: 'PREF',
+          value: `hl=${hl}&gl=${hl.toUpperCase()}`,
+          domain,
+          path: '/',
+          expires: Math.floor(Date.now() / 1000) + 31536000,
+        },
+      ]);
+      await page.context().addCookies(cookies);
+    } catch {
+      // Ignore cookie injection errors
+    }
+  }
+
+  /**
+   * Handle Google cookie consent popup or redirect if present
    */
   private static async handleConsent(page: Page): Promise<void> {
     try {
+      // 1. If currently on consent.google.com
+      if (page.url().includes('consent.google.com')) {
+        log.info(`[Consent] Page is on consent.google.com (${page.url()}). Dismissing consent...`);
+        for (const selector of SELECTORS.consentButtons) {
+          const button = page.locator(selector).first();
+          if (await button.isVisible({ timeout: 1500 }).catch(() => false)) {
+            await button.click().catch(() => {});
+            await page.waitForTimeout(1000);
+            break;
+          }
+        }
+
+        // Wait for redirect away from consent.google.com
+        await page.waitForURL((url) => !url.href.includes('consent.google.com'), { timeout: 10000 }).catch(() => {});
+
+        // If STILL on consent.google.com, extract 'continue' parameter and navigate directly
+        if (page.url().includes('consent.google.com')) {
+          try {
+            const continueUrl = new URL(page.url()).searchParams.get('continue');
+            if (continueUrl) {
+              log.info(`[Consent] Bypassing consent redirect by directly navigating to continue target: ${continueUrl}`);
+              await page.goto(continueUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
+            }
+          } catch {
+            // Ignore URL parsing errors
+          }
+        }
+      }
+
+      // 2. Regular consent modal on Google Maps page
       for (const selector of SELECTORS.consentButtons) {
         const button = page.locator(selector).first();
-        if (await button.isVisible({ timeout: 2000 }).catch(() => false)) {
-          await button.click();
+        if (await button.isVisible({ timeout: 1500 }).catch(() => false)) {
+          await button.click().catch(() => {});
           await page.waitForTimeout(1000);
           break;
+        }
+      }
+
+      // 3. Check within iframes
+      for (const frame of page.frames()) {
+        if (frame.url().includes('consent.google.com')) {
+          for (const selector of SELECTORS.consentButtons) {
+            const btn = frame.locator(selector).first();
+            if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+              await btn.click().catch(() => {});
+              await page.waitForTimeout(1000);
+              break;
+            }
+          }
         }
       }
     } catch {
@@ -204,7 +343,29 @@ export class GBPScraper {
     targetUrl: string,
     options: ScrapeOptions
   ): Promise<string> {
-    const hl = options.language || options.hl || 'id';
+    const hl = (options.language || options.hl || 'id').toLowerCase();
+
+    // 0. If target is a shortlink, resolve it first via HEAD request to prevent language loss on redirect
+    if (targetUrl.includes('maps.app.goo.gl') || targetUrl.includes('goo.gl')) {
+      try {
+        const headRes = await fetch(targetUrl, { method: 'HEAD', redirect: 'manual' });
+        const location = headRes.headers.get('location');
+        if (location && location.startsWith('http')) {
+          log.info(`Resolved shortlink ${targetUrl} -> ${location}`);
+          targetUrl = location;
+        }
+      } catch {
+        // Proceed with original targetUrl if fetch fails
+      }
+    }
+
+    // If already on Google Maps business page and title is visible, reuse the page
+    const currentUrl = page.url();
+    const isAlreadyOnPlace = !currentUrl.includes('consent.google.com') &&
+      (await page.locator(SELECTORS.title).first().isVisible({ timeout: 1000 }).catch(() => false));
+    if (isAlreadyOnPlace && (currentUrl.includes('/maps/place') || currentUrl.includes('place_id'))) {
+      return currentUrl;
+    }
 
     let urlToLoad = targetUrl;
     if (
@@ -219,6 +380,25 @@ export class GBPScraper {
     await page.goto(urlToLoad, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await this.handleConsent(page);
 
+    // If still on consent.google.com, attempt continue redirect
+    if (page.url().includes('consent.google.com')) {
+      const continueTarget = new URL(page.url()).searchParams.get('continue');
+      if (continueTarget) {
+        log.info(`[Consent] Navigating directly to continue target: ${continueTarget}`);
+        await page.goto(continueTarget, { waitUntil: 'domcontentloaded', timeout: 35000 });
+        await this.handleConsent(page);
+      }
+    }
+
+    // Ensure requested language param is active on the current navigated page
+    const afterNavUrl = page.url();
+    if (!afterNavUrl.includes('consent.google.com') && !afterNavUrl.includes(`hl=${hl}`)) {
+      const enforcedUrl = afterNavUrl + (afterNavUrl.includes('?') ? '&' : '?') + `hl=${hl}`;
+      log.info(`Enforcing requested language '${hl}' on: ${enforcedUrl}`);
+      await page.goto(enforcedUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
+      await this.handleConsent(page);
+    }
+
     // Check if we are on a search result list (multiple places found)
     const firstResult = page.locator('a.hfpxzc').first();
     const isList = await firstResult.isVisible({ timeout: 4000 }).catch(() => false);
@@ -227,6 +407,11 @@ export class GBPScraper {
       log.info('Multiple results found. Selecting the first business result...');
       await firstResult.click();
       await page.waitForTimeout(2000);
+      await this.handleConsent(page);
+    }
+
+    if (page.url().includes('consent.google.com')) {
+      throw new Error(`Failed to bypass Google consent page: ${page.url()}`);
     }
 
     // Wait for the business title to appear
@@ -351,8 +536,19 @@ export class GBPScraper {
       purgeOnStart: true,
     });
 
+    const proxyConfiguration = await proxyManager.getProxyConfiguration(options);
+
     const crawler = new PlaywrightCrawler({
       headless: config.headless,
+      proxyConfiguration,
+      useSessionPool: true,
+      sessionPoolOptions: {
+        maxPoolSize: 100,
+        sessionOptions: {
+          maxErrorScore: 1,
+        },
+      },
+      maxRequestRetries: config.maxRequestRetries || 5,
       maxRequestsPerCrawl: targets.length,
       navigationTimeoutSecs: config.navigationTimeoutSecs,
       requestHandlerTimeoutSecs: 120,
@@ -363,15 +559,41 @@ export class GBPScraper {
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-blink-features=AutomationControlled',
+            '--ignore-certificate-errors',
+            '--ignore-ssl-errors',
+            `--lang=${(options.language || options.hl || 'id').toLowerCase()}`,
           ],
         },
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
       },
-      async requestHandler({ page, request }) {
+      preNavigationHooks: [
+        async ({ page }, gotoOptions: any) => {
+          await GBPScraper.preparePageForGoogle(page, gotoOptions, options);
+        },
+      ],
+      errorHandler({ request, session, proxyInfo }, error) {
+        if (proxyInfo?.url) {
+          proxyManager.markDead(proxyInfo.url);
+          log.warning(`[Proxy Rotator] Proxy ${proxyInfo.url} failed for ${request.url} (${error.message}). Retiring session and switching proxy...`);
+        }
+        session?.retire();
+      },
+      failedRequestHandler({ request, proxyInfo }, error) {
+        if (proxyInfo?.url) {
+          proxyManager.markDead(proxyInfo.url);
+        }
+        log.error(`[Crawler] Request ${request.url} failed after maximum retries with proxy ${proxyInfo?.url || 'direct'}: ${error.message}`);
+      },
+      async requestHandler({ page, request, proxyInfo }) {
+        if (proxyInfo?.url) {
+          log.info(`[Crawler] Scraping profile ${request.url} via proxy: ${proxyInfo.url}`);
+        }
         try {
           const profile = await GBPScraper.scrapeSingleProfile(page, request.url, options);
           results.push(profile);
         } catch (err: any) {
           scrapeError = err;
+          throw err;
         }
       },
     }, crawleeConfig);
@@ -519,24 +741,83 @@ export class GBPScraper {
       await page.waitForTimeout(1500);
     }
 
-    // Extract review cards up to maxReviews
-    const reviewCards = page.locator(SELECTORS.reviewCard);
-    const totalCards = await reviewCards.count();
-    const limit = Math.min(totalCards, maxReviews);
+    // Wait briefly for review cards to populate in DOM if not present yet
+    await page.waitForSelector(SELECTORS.reviewCard, { timeout: 6000 }).catch(() => null);
 
-    for (let i = 0; i < limit; i++) {
-      const card = reviewCards.nth(i);
+    // Expand all visible "See more" / "Lainnya" buttons
+    await page.evaluate(() => {
+      const expandButtons = document.querySelectorAll(
+        'button.w8nwRe.kyuRq, button[aria-label*="Lihat lainnya" i], button[aria-label*="See more" i]'
+      );
+      expandButtons.forEach((b: any) => b.click());
+    }).catch(() => {});
+    await page.waitForTimeout(200);
 
-      // Expand "See more" / "Lainnya" button if exists
-      const expandButton = card.locator(SELECTORS.reviewExpandButton).first();
-      if (await expandButton.isVisible({ timeout: 500 }).catch(() => false)) {
-        await expandButton.click().catch(() => {});
-        await page.waitForTimeout(200);
-      }
+    // Extract all cards in browser context for ultra-fast, timeout-free extraction
+    const rawCardsData = await page.evaluate((maxCount) => {
+      const cards = Array.from(document.querySelectorAll('div.jftiEf'));
+      const limit = Math.min(cards.length, maxCount);
+      return cards.slice(0, limit).map((card) => {
+        // Author
+        const nameEl = card.querySelector('div.d4r55');
+        const rawAuthor = nameEl ? nameEl.textContent?.trim() || '' : '';
+        const author = rawAuthor.split(/\n|·|Local Guide/)[0].trim() || 'Anonymous';
 
-      // Relative date & estimated publishedAtDate
-      const relativeTime = (await card.locator(SELECTORS.reviewDate).first().textContent().catch(() => ''))?.trim() || null;
-      const parsedDate = relativeTime ? parseRelativeDate(relativeTime) : null;
+        const linkEl = card.querySelector('button.al6Kxe, a[data-href*="contrib"]');
+        const authorProfileUrl = linkEl ? (linkEl.getAttribute('href') || linkEl.getAttribute('data-href')) : null;
+
+        // Rating
+        const ratingEl = card.querySelector('span.kvMYJc');
+        const ariaLabel = ratingEl ? (ratingEl.getAttribute('aria-label') || '') : '';
+        const match = ariaLabel.match(/(\d+([.,]\d+)?)/);
+        const rating = match ? parseFloat(match[1].replace(',', '.')) : 5;
+
+        // Date
+        const dateEl = card.querySelector('span.rsqaWe');
+        const relativeTime = dateEl ? dateEl.textContent?.trim() || null : null;
+
+        // Text
+        const textEl = card.querySelector('span.wiI7m, div.MyEned span, div[lang] span');
+        const text = textEl ? textEl.textContent?.trim() || null : null;
+
+        // Likes
+        const likesEl = card.querySelector('span.pkWtMe, button[aria-label*="orang merasa" i], button[aria-label*="people found" i]');
+        let likes = 0;
+        if (likesEl) {
+          const digits = (likesEl.textContent || '').replace(/\D/g, '');
+          if (digits) likes = parseInt(digits, 10);
+        }
+
+        // Owner response
+        let ownerResponse: { text: string; date: string | null } | null = null;
+        const ownerEl = card.querySelector('div.CDe7pd');
+        if (ownerEl) {
+          const respTextEl = ownerEl.querySelector('div.wiI7pd, div.wiI7m, div[lang]');
+          const respDateEl = ownerEl.querySelector('span.DZSIDd, span.DHIhFt');
+          const respText = respTextEl ? respTextEl.textContent?.replace(/Lainnya|More$/, '').trim() || '' : '';
+          const respDate = respDateEl ? respDateEl.textContent?.trim() || null : null;
+          if (respText) {
+            ownerResponse = { text: respText, date: respDate };
+          }
+        }
+
+        const reviewId = card.getAttribute('data-review-id');
+
+        return {
+          reviewId,
+          author,
+          authorProfileUrl,
+          rating,
+          relativeTime,
+          text,
+          likes,
+          ownerResponse,
+        };
+      });
+    }, maxReviews);
+
+    for (const raw of rawCardsData) {
+      const parsedDate = raw.relativeTime ? parseRelativeDate(raw.relativeTime) : null;
 
       // Filter by reviewsStartDate if specified
       if (startDate && parsedDate && parsedDate < startDate) {
@@ -547,72 +828,25 @@ export class GBPScraper {
         continue;
       }
 
-      // Author name & profile link (respecting personalData flag)
-      let author = 'Google user';
-      let authorProfileUrl: string | null = null;
-
-      if (includePersonalData) {
-        const rawAuthor = (await card.locator(SELECTORS.reviewerName).first().textContent().catch(() => ''))?.trim() || 'Anonymous';
-        author = rawAuthor.split(/\n|·|Local Guide/)[0].trim() || 'Anonymous';
-
-        const authorLink = card.locator(SELECTORS.reviewerLink).first();
-        authorProfileUrl = (await authorLink.getAttribute('href').catch(() => null)) || null;
-      }
-
-      // Rating
-      let starRating = 5;
-      const ratingEl = card.locator(SELECTORS.reviewRating).first();
-      const ariaLabel = (await ratingEl.getAttribute('aria-label').catch(() => '')) || '';
-      const ratingMatch = ariaLabel.match(/(\d+([.,]\d+)?)/);
-      if (ratingMatch) {
-        starRating = parseFloat(ratingMatch[1].replace(',', '.'));
-      }
-
-      // Review text
-      const text = (await card.locator(SELECTORS.reviewText).first().textContent().catch(() => ''))?.trim() || null;
-
-      // Likes
-      let likes = 0;
-      const likesEl = card.locator(SELECTORS.reviewLikes).first();
-      if (await likesEl.isVisible().catch(() => false)) {
-        const rawLikes = await likesEl.textContent().catch(() => '0');
-        const digits = rawLikes?.replace(/\D/g, '');
-        if (digits) likes = parseInt(digits, 10);
-      }
-
-      // Owner response
-      let ownerResponse: { text: string; date: string | null } | null = null;
-      const ownerEl = card.locator(SELECTORS.ownerResponse).first();
-      if (await ownerEl.isVisible().catch(() => false)) {
-        const respText = (await card.locator(SELECTORS.ownerResponseText).first().textContent().catch(() => ''))?.trim() || '';
-        const respDate = (await card.locator(SELECTORS.ownerResponseDate).first().textContent().catch(() => ''))?.trim() || null;
-        if (respText) {
-          ownerResponse = { text: respText, date: respDate };
-        }
-      }
-
-      // Extract reviewId from card attribute
-      const reviewId = (await card.getAttribute('data-review-id').catch(() => null)) || null;
-
       // Build direct Google Maps review URL
       let reviewUrl: string | null = null;
-      if (reviewId) {
+      if (raw.reviewId) {
         const latPart = latitude !== null && longitude !== null ? `@${latitude},${longitude},785m/` : '';
         const cidPart = cidHex ? `!2m1!1s0x0:${cidHex}` : '';
-        reviewUrl = `https://www.google.com/maps/reviews/${latPart}data=!3m2!1e3!4b1!4m6!14m5!1m4!2m3!1s${reviewId}${cidPart}?entry=ttu`;
+        reviewUrl = `https://www.google.com/maps/reviews/${latPart}data=!3m2!1e3!4b1!4m6!14m5!1m4!2m3!1s${raw.reviewId}${cidPart}?entry=ttu`;
       }
 
       reviews.push({
-        reviewId,
+        reviewId: raw.reviewId,
         reviewUrl,
-        author,
-        authorProfileUrl,
-        rating: starRating,
-        relativeTime,
+        author: includePersonalData ? raw.author : 'Google user',
+        authorProfileUrl: includePersonalData ? raw.authorProfileUrl : null,
+        rating: raw.rating,
+        relativeTime: raw.relativeTime,
         publishedAtDate: parsedDate ? parsedDate.toISOString() : null,
-        text,
-        likes,
-        ownerResponse,
+        text: raw.text,
+        likes: raw.likes,
+        ownerResponse: raw.ownerResponse,
       });
     }
 
@@ -659,8 +893,19 @@ export class GBPScraper {
       purgeOnStart: true,
     });
 
+    const proxyConfiguration = await proxyManager.getProxyConfiguration(options);
+
     const crawler = new PlaywrightCrawler({
       headless: config.headless,
+      proxyConfiguration,
+      useSessionPool: true,
+      sessionPoolOptions: {
+        maxPoolSize: 100,
+        sessionOptions: {
+          maxErrorScore: 1,
+        },
+      },
+      maxRequestRetries: config.maxRequestRetries || 5,
       maxRequestsPerCrawl: targets.length,
       navigationTimeoutSecs: config.navigationTimeoutSecs,
       requestHandlerTimeoutSecs: 240,
@@ -671,15 +916,41 @@ export class GBPScraper {
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-blink-features=AutomationControlled',
+            '--ignore-certificate-errors',
+            '--ignore-ssl-errors',
+            `--lang=${(options.language || options.hl || 'id').toLowerCase()}`,
           ],
         },
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
       },
-      async requestHandler({ page, request }) {
+      preNavigationHooks: [
+        async ({ page }, gotoOptions: any) => {
+          await GBPScraper.preparePageForGoogle(page, gotoOptions, options);
+        },
+      ],
+      errorHandler({ request, session, proxyInfo }, error) {
+        if (proxyInfo?.url) {
+          proxyManager.markDead(proxyInfo.url);
+          log.warning(`[Proxy Rotator] Proxy ${proxyInfo.url} failed for ${request.url} (${error.message}). Retiring session and switching proxy...`);
+        }
+        session?.retire();
+      },
+      failedRequestHandler({ request, proxyInfo }, error) {
+        if (proxyInfo?.url) {
+          proxyManager.markDead(proxyInfo.url);
+        }
+        log.error(`[Crawler] Request ${request.url} failed after maximum retries with proxy ${proxyInfo?.url || 'direct'}: ${error.message}`);
+      },
+      async requestHandler({ page, request, proxyInfo }) {
+        if (proxyInfo?.url) {
+          log.info(`[Crawler] Scraping reviews ${request.url} via proxy: ${proxyInfo.url}`);
+        }
         try {
           const item = await GBPScraper.scrapeSingleReviews(page, request.url, options);
           results.push(item);
         } catch (err: any) {
           scrapeError = err;
+          throw err;
         }
       },
     }, crawleeConfig);
@@ -755,8 +1026,19 @@ export class GBPScraper {
       purgeOnStart: true,
     });
 
+    const proxyConfiguration = await proxyManager.getProxyConfiguration(options);
+
     const crawler = new PlaywrightCrawler({
       headless: config.headless,
+      proxyConfiguration,
+      useSessionPool: true,
+      sessionPoolOptions: {
+        maxPoolSize: 100,
+        sessionOptions: {
+          maxErrorScore: 1,
+        },
+      },
+      maxRequestRetries: config.maxRequestRetries || 5,
       maxRequestsPerCrawl: targets.length,
       navigationTimeoutSecs: config.navigationTimeoutSecs,
       requestHandlerTimeoutSecs: 300,
@@ -767,15 +1049,41 @@ export class GBPScraper {
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-blink-features=AutomationControlled',
+            '--ignore-certificate-errors',
+            '--ignore-ssl-errors',
+            `--lang=${(options.language || options.hl || 'id').toLowerCase()}`,
           ],
         },
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
       },
-      async requestHandler({ page, request }) {
+      preNavigationHooks: [
+        async ({ page }, gotoOptions: any) => {
+          await GBPScraper.preparePageForGoogle(page, gotoOptions, options);
+        },
+      ],
+      errorHandler({ request, session, proxyInfo }, error) {
+        if (proxyInfo?.url) {
+          proxyManager.markDead(proxyInfo.url);
+          log.warning(`[Proxy Rotator] Proxy ${proxyInfo.url} failed for ${request.url} (${error.message}). Retiring session and switching proxy...`);
+        }
+        session?.retire();
+      },
+      failedRequestHandler({ request, proxyInfo }, error) {
+        if (proxyInfo?.url) {
+          proxyManager.markDead(proxyInfo.url);
+        }
+        log.error(`[Crawler] Request ${request.url} failed after maximum retries with proxy ${proxyInfo?.url || 'direct'}: ${error.message}`);
+      },
+      async requestHandler({ page, request, proxyInfo }) {
+        if (proxyInfo?.url) {
+          log.info(`[Crawler] Scraping full ${request.url} via proxy: ${proxyInfo.url}`);
+        }
         try {
           const item = await GBPScraper.scrapeSingleFull(page, request.url, options);
           results.push(item);
         } catch (err: any) {
           scrapeError = err;
+          throw err;
         }
       },
     }, crawleeConfig);

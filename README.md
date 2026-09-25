@@ -12,6 +12,7 @@ Layanan REST API untuk scraping data profil bisnis (Google Business Profile) dan
 - **Synchronous & Asynchronous Mode**:
   - **Sync**: Cocok untuk scraping cepat langsung mengembalikan data JSON.
   - **Async (Job Queue)**: Menghasilkan `jobId` untuk scraping ulasan dalam jumlah banyak tanpa risiko HTTP timeout.
+- **Proxy Pool & Auto-Rotation**: Menggunakan daftar proxy publik otomatis dari [Proxifly](https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/all/data.json) (>25.000 proxy). Dilengkapi **fast TCP pre-validation** dan **otomatis mengganti/meretire proxy yang mati atau diblokir Google** tanpa menghentikan proses crawling.
 - **OpenAPI & Swagger UI**: Dokumentasi otomatis OpenAPI 3.0 dan UI interaktif di `/docs`.
 
 ---
@@ -83,6 +84,9 @@ API mendukung format input ala Apify Google Maps Scraper dengan parameter fleksi
 - **`reviewsStartDate`** *(string, format "YYYY-MM-DD")*: Filter ulasan; hanya ulasan yang dipublikasikan pada atau setelah tanggal ini yang akan diambil.
 - **`startUrls`** *(array of object `{ url }`)*: Daftar URL atau shortlink Google Maps yang ingin di-scrape.
 - **`sortBy`** *(string, enum: `["newest", "highest", "lowest", "relevant"]`, default: "newest")*: Urutan ulasan.
+- **`useProxy`** *(boolean, default: true)*: Gunakan proxy otomatis dari pool Proxifly untuk menghindari rate limit Google.
+- **`proxyUrl`** *(string, opsional)*: URL proxy khusus (misal `http://user:pass@host:port` atau `socks5://host:port`) jika ingin menggunakan proxy sendiri.
+- **`proxyUrls`** *(array of string, opsional)*: Daftar URL proxy kustom untuk dirotasi.
 - **`query` / `url`** *(string, fallback)*: Kueri pencarian teks atau URL tunggal (tetap didukung untuk kompatibilitas).
 
 ---
@@ -205,6 +209,25 @@ Response (HTTP 202 Accepted):
 
 ---
 
+### 5. `GET /api/proxy/stats`
+Melihat status proxy pool (jumlah proxy yang dimuat dari Proxifly, jumlah proxy yang terdeteksi mati, dsb).
+
+**Contoh Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "enabled": true,
+    "totalLoaded": 27583,
+    "deadCount": 87,
+    "lastFetchedAt": "2026-09-25T07:01:47.906Z",
+    "sourceUrl": "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/all/data.json"
+  }
+}
+```
+
+---
+
 ## Konfigurasi Environment Variable
 
 Dapat diatur melalui file `.env` atau system environment variables:
@@ -214,6 +237,9 @@ Dapat diatur melalui file `.env` atau system environment variables:
 | `PORT` | `3000` | Port server Fastify |
 | `HOST` | `0.0.0.0` | Host bind address |
 | `HEADLESS` | `true` | Jalankan browser secara headless (`false` untuk debug UI) |
+| `USE_PROXY` | `true` | Aktifkan proxy pool otomatis |
+| `PROXY_LIST_URL` | `https://cdn.jsdelivr.net/.../data.json` | URL sumber proxy Proxifly |
+| `PROXY_POOL_SIZE` | `1000` | Jumlah kandidat proxy acak yang diambil per siklus |
 | `DEFAULT_MAX_REVIEWS` | `20` | Jumlah default review yang di-scrape jika tidak ditentukan |
 | `MAX_REVIEWS_LIMIT` | `200` | Batas maksimum review per request sync |
 | `NAV_TIMEOUT_SECS` | `60` | Batas timeout navigasi browser Crawlee (detik) |

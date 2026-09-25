@@ -93,6 +93,46 @@ const commonInputProperties = {
     default: 'newest',
     example: 'newest',
     description: 'Review sort order'
+  },
+  useProxy: {
+    type: 'boolean',
+    default: true,
+    example: true,
+    description: 'Gunakan proxy rotasi otomatis dari Proxifly untuk menghindari limitasi Google. Default: true.'
+  },
+  proxyUrl: {
+    type: 'string',
+    example: 'socks5://1.2.3.4:1080',
+    description: 'Custom proxy URL tunggal jika ingin menggunakan proxy sendiri (opsional).'
+  },
+  proxyUrls: {
+    type: 'array',
+    items: { type: 'string' },
+    description: 'Daftar custom proxy URLs jika ingin menggunakan pool proxy sendiri (opsional).'
+  }
+};
+
+export const getProxyStatsSchema = {
+  description: 'Get current proxy pool statistics and health status',
+  tags: ['System'],
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean' },
+            totalLoaded: { type: 'integer' },
+            deadCount: { type: 'integer' },
+            activePoolSize: { type: 'integer' },
+            lastFetchedAt: { type: 'string', nullable: true },
+            sourceUrl: { type: 'string' }
+          }
+        }
+      }
+    }
   }
 };
 
