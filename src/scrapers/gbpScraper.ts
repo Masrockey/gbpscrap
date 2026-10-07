@@ -60,12 +60,17 @@ export interface ScrapeOptions {
  */
 export function parseRelativeDate(raw: string): Date | null {
   if (!raw) return null;
-  const text = raw.toLowerCase().replace(/^(diedit|edited|bearbeitet|gewijzigd)\s*/i, '').trim();
+  const text = raw
+    .toLowerCase()
+    .replace(/^(respon|respons|tanggapan)\s+(dari\s+)?pemilik\s*:\s*/i, '')
+    .replace(/^(diedit|edited|bearbeitet|gewijzigd)\s*/i, '')
+    .trim();
   const now = new Date();
 
   // Days
   if (
-    text.includes('hari lalu') || text.includes('day ago') || text.includes('days ago') ||
+    text.includes('hari lalu') || text.includes('hari yang lalu') ||
+    text.includes('day ago') || text.includes('days ago') ||
     text.includes('tage') || text.includes('tagen') || text.includes('dagen geleden') || text.includes('días')
   ) {
     const match = text.match(/(\d+)/);
@@ -76,7 +81,9 @@ export function parseRelativeDate(raw: string): Date | null {
 
   // Weeks
   if (
-    text.includes('minggu lalu') || text.includes('week ago') || text.includes('weeks ago') ||
+    text.includes('minggu lalu') || text.includes('minggu yang lalu') ||
+    text.includes('seminggu') ||
+    text.includes('week ago') || text.includes('weeks ago') ||
     text.includes('woche') || text.includes('wochen') || text.includes('weken geleden') || text.includes('semanas')
   ) {
     const match = text.match(/(\d+)/);
@@ -87,7 +94,9 @@ export function parseRelativeDate(raw: string): Date | null {
 
   // Months
   if (
-    text.includes('bulan lalu') || text.includes('month ago') || text.includes('months ago') ||
+    text.includes('bulan lalu') || text.includes('bulan yang lalu') ||
+    text.includes('sebulan') ||
+    text.includes('month ago') || text.includes('months ago') ||
     text.includes('monat') || text.includes('monaten') || text.includes('maand') || text.includes('maanden') || text.includes('meses')
   ) {
     const match = text.match(/(\d+)/);
@@ -98,7 +107,9 @@ export function parseRelativeDate(raw: string): Date | null {
 
   // Years
   if (
-    text.includes('tahun lalu') || text.includes('year ago') || text.includes('years ago') ||
+    text.includes('tahun lalu') || text.includes('tahun yang lalu') ||
+    text.includes('setahun') ||
+    text.includes('year ago') || text.includes('years ago') ||
     text.includes('jahr') || text.includes('jahren') || text.includes('jaar') || text.includes('años')
   ) {
     const match = text.match(/(\d+)/);
@@ -115,8 +126,11 @@ export function parseRelativeDate(raw: string): Date | null {
 
   // Hours / Minutes
   if (
-    text.includes('jam lalu') || text.includes('hour ago') || text.includes('hours ago') || text.includes('stunde') || text.includes('stunden') || text.includes('uur geleden') ||
-    text.includes('menit lalu') || text.includes('minute ago') || text.includes('minutes ago') || text.includes('minute') || text.includes('minuten')
+    text.includes('jam lalu') || text.includes('jam yang lalu') ||
+    text.includes('hour ago') || text.includes('hours ago') || text.includes('stunde') || text.includes('stunden') || text.includes('uur geleden') ||
+    text.includes('menit lalu') || text.includes('menit yang lalu') ||
+    text.includes('minute ago') || text.includes('minutes ago') || text.includes('minute') || text.includes('minuten') ||
+    text.includes('baru saja') || text.includes('just now')
   ) {
     return now;
   }
@@ -458,10 +472,38 @@ export class GBPScraper {
     let reviewCount: number | null = null;
     const countEl = page.locator(SELECTORS.reviewCount).first();
     if (await countEl.isVisible().catch(() => false)) {
-      const rawCount = await countEl.textContent();
-      if (rawCount) {
-        const digits = rawCount.replace(/\D/g, '');
+      const rawText = (await countEl.textContent()) || '';
+      const ariaLabel = (await countEl.getAttribute('aria-label')) || '';
+      const textToParse = ariaLabel || rawText;
+      if (textToParse) {
+        const digits = textToParse.replace(/\D/g, '');
         if (digits) reviewCount = parseInt(digits, 10);
+      }
+    }
+
+    // Fallback 1: Check parent container div.F7nice text e.g. "4,5(68)"
+    if (reviewCount === null) {
+      const f7nice = page.locator('div.F7nice').first();
+      if (await f7nice.isVisible().catch(() => false)) {
+        const f7Text = (await f7nice.textContent()) || '';
+        const match = f7Text.match(/\(([\d.,]+)\)/);
+        if (match) {
+          const parsed = parseInt(match[1].replace(/\D/g, ''), 10);
+          if (!isNaN(parsed)) reviewCount = parsed;
+        }
+      }
+    }
+
+    // Fallback 2: Check reviews tab button aria-label e.g. "68 ulasan"
+    if (reviewCount === null) {
+      const tabEl = page.locator('button[role="tab"][aria-label*="ulasan" i], button[role="tab"][aria-label*="review" i]').first();
+      if (await tabEl.isVisible().catch(() => false)) {
+        const tabLabel = (await tabEl.getAttribute('aria-label')) || (await tabEl.textContent()) || '';
+        const match = tabLabel.match(/(\d+[\d.,]*)\s*(?:ulasan|review)/i);
+        if (match) {
+          const parsed = parseInt(match[1].replace(/\D/g, ''), 10);
+          if (!isNaN(parsed)) reviewCount = parsed;
+        }
       }
     }
 
@@ -495,11 +537,41 @@ export class GBPScraper {
 
     // Opening Hours
     const openingHours: string[] = [];
+    const hoursDropdown = page.locator(SELECTORS.openingHoursDropdown).first();
+    if (await hoursDropdown.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await hoursDropdown.click().catch(() => {});
+      await page.waitForTimeout(600);
+    }
+
     const hoursRows = page.locator(SELECTORS.openingHoursTable);
     const count = await hoursRows.count();
     for (let i = 0; i < count; i++) {
-      const rowText = (await hoursRows.nth(i).textContent())?.trim();
-      if (rowText) openingHours.push(rowText.replace(/\s+/g, ' '));
+      const row = hoursRows.nth(i);
+      const cells = row.locator('td');
+      const cellCount = await cells.count();
+      if (cellCount >= 2) {
+        const day = (await cells.nth(0).textContent())?.trim();
+        const time = (await cells.nth(1).textContent())?.trim();
+        if (day && time) {
+          openingHours.push(`${day}: ${time}`.replace(/\s+/g, ' '));
+          continue;
+        }
+      }
+      const rowText = (await row.textContent())?.trim();
+      if (rowText) {
+        openingHours.push(rowText.replace(/\s+/g, ' '));
+      }
+    }
+
+    // Fallback: check button with data-value or aria-label (e.g. data-value="Jumat,07.30–17.00")
+    if (openingHours.length === 0) {
+      const copyBtn = page.locator('button.mWUh3d, button[aria-label*="Salin jam buka"], button[data-value*=","]').first();
+      if (await copyBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+        const val = await copyBtn.getAttribute('data-value');
+        if (val) {
+          openingHours.push(val.replace(',', ': '));
+        }
+      }
     }
 
     const { latitude, longitude } = GBPScraper.extractCoordinates(finalUrl);
@@ -836,6 +908,15 @@ export class GBPScraper {
         reviewUrl = `https://www.google.com/maps/reviews/${latPart}data=!3m2!1e3!4b1!4m6!14m5!1m4!2m3!1s${raw.reviewId}${cidPart}?entry=ttu`;
       }
 
+      let ownerResponse = raw.ownerResponse;
+      if (ownerResponse && ownerResponse.date) {
+        const parsedOwnerDate = parseRelativeDate(ownerResponse.date);
+        ownerResponse = {
+          text: ownerResponse.text,
+          date: parsedOwnerDate ? parsedOwnerDate.toISOString() : ownerResponse.date,
+        };
+      }
+
       reviews.push({
         reviewId: raw.reviewId,
         reviewUrl,
@@ -846,7 +927,7 @@ export class GBPScraper {
         publishedAtDate: parsedDate ? parsedDate.toISOString() : null,
         text: raw.text,
         likes: raw.likes,
-        ownerResponse: raw.ownerResponse,
+        ownerResponse,
       });
     }
 

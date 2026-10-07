@@ -29,12 +29,13 @@ export const SELECTORS = {
   // Profile details
   title: 'h1.DUwDvf, h1.fontHeadlineLarge, div.TIHn2 h1, div.lMbq3e h1, div.m6QErb h1',
   rating: 'div.F7nice span[aria-hidden="true"], span.ceNzKf, span.fontDisplayLarge',
-  reviewCount: 'div.F7nice span:has-text("(") span, div.F7nice span:nth-child(2) span, button[aria-label*="review"]',
+  reviewCount: 'div.F7nice span:has-text("(") span, div.F7nice span:nth-child(2) span, button[aria-label*="ulasan" i], button[aria-label*="review" i], span[aria-label*="ulasan" i], span[aria-label*="review" i], span:has-text(" ulasan")',
   category: 'button.DkEaL, span.DkEaL',
   address: 'button[data-item-id="address"] div.fontBodyMedium, [data-item-id="address"]',
   phone: 'button[data-item-id*="phone"] div.fontBodyMedium, [data-item-id*="phone"]',
   website: 'a[data-item-id="authority"], [data-item-id="authority"]',
-  openingHoursTable: 'table.eKjhZj tr, div[data-item-id*="oh"] table tr',
+  openingHoursDropdown: 'div.OMl5r[role="button"], div[jsaction*="openhours.wfvdle"], [aria-label*="jam buka" i], [aria-label*="opening hours" i]',
+  openingHoursTable: 'table.eK4R0e tr, tr.y0skZc, table.eKjhZj tr, div[data-item-id*="oh"] table tr, div.t39EBf table tr',
 
   // Tabs & Reviews section
   reviewsTab: 'button[role="tab"][aria-label*="Ulasan" i], button[role="tab"][aria-label*="Reviews" i], button[role="tab"]:has-text("Ulasan"), button[role="tab"]:has-text("Reviews")',
